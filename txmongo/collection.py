@@ -865,6 +865,27 @@ class Collection(object):
     @timeout
     @defer.inlineCallbacks
     def save(self, doc, safe=None, **kwargs):
+        """Save a document in this collection.
+
+        *Please consider using new-style* :meth:`insert_one()` *and*
+        :meth:`replace_one()` *methods instead.*
+
+        If `doc` already has an ``"_id"`` then upsert operation is performed
+        and any existing document with that ``"_id"`` is overwritten. Otherwise
+        an insert operation is performed. In this case ``"_id"`` is added to
+        `doc` and this method returns the ``"_id"`` of saved document.
+
+        :raises TypeError:
+            If `doc` is not instance of `dict`.
+
+        :param doc:
+            Document to save
+
+        :param safe:
+            ``True`` or ``False`` forces usage of respectively acknowledged or
+            unacknowledged Write Concern. If ``None``, :attr:`write_concern` is
+            used.
+        """
         if not isinstance(doc, dict):
             raise TypeError("TxMongo: cannot save objects of type {0}".format(type(doc)))
         oid = doc.get("_id")
@@ -879,6 +900,30 @@ class Collection(object):
     @timeout
     @defer.inlineCallbacks
     def remove(self, spec, safe=None, single=False, flags=0, **kwargs):
+        """Remove a document(s) from this collection.
+
+        *Please consider using new-style* :meth:`delete_one()` *and*
+        :meth:`delete_many()` *methods instead.*
+
+        :param spec:
+            the query object specifying the documents to be removed OR
+            an :class:`~bson.ObjectId` instance specifying the value of ``"_id"`` for the
+            document to be removed. Pass ``{}`` to remove all documents from
+            the collection.
+
+        :param safe:
+            ``True`` or ``False`` forces usage of respectively acknowledged or
+            unacknowledged Write Concern. If ``None``, :attr:`write_concern` is
+            used.
+
+        :param single:
+            If ``False`` (the default) all documents matching `spec` are removed.
+            Otherwise only the first matching document is removed.
+
+        :returns:
+            deferred result of `getLastError` or ``None`` if write acknowledgement
+            is disabled.
+        """
         if isinstance(spec, ObjectId):
             spec = SON(dict(_id=spec))
         if not isinstance(spec, dict):
