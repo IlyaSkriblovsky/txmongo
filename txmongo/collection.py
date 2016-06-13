@@ -965,6 +965,14 @@ class Collection(object):
     @timeout
     @defer.inlineCallbacks
     def delete_one(self, filter, **kwargs):
+        """Delete a single document matching the filter.
+
+        :param filter:
+            A query that matches the document to delete.
+
+        :returns:
+            deferred instance of :class:`pymongo.results.DeleteResult`
+        """
         raw_response = yield self._delete(filter, multi=False, **kwargs)
         defer.returnValue(DeleteResult(raw_response, self.write_concern.acknowledged))
 
