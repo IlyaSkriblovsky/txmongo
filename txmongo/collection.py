@@ -50,6 +50,107 @@ from txmongo.types import Document
 from txmongo.utils import check_deadline, timeout
 
 
+class Cursor:
+    # FIXME:
+    #   - Timeouts?
+    #   - Reenterability?
+    #   - exhausted flag?
+    #   - cursor closing?
+
+    cursor_id: Optional[int] = None
+    current_batch: Optional[List[dict]] = None
+    current_offset: int = 0
+    pos: int = 0
+    exhausted: bool = False
+
+    next_batch_deferreds: Optional[List[Deferred]] = None
+
+    def __init__(self, collection: "Collection", command: dict, batch_size: int):
+        self.collection = collection
+        self.command = command
+        self.batch_size = batch_size
+
+    def __after_connection(self, proto: MongoProtocol):
+        print("SEND FIND")
+        return proto.send_simple_msg(
+            self.command, self.collection.codec_options
+        ).addCallback(self.__after_reply)
+
+    def __get_more(self, proto: MongoProtocol):
+        get_more = {
+            "getMore": self.cursor_id,
+            "$db": self.collection.database.name,
+            "collection": self.collection.name,
+        }
+        if self.batch_size:
+            get_more["batchSize"] = self.batch_size
+
+        print("SEND GETMORE")
+        return proto.send_simple_msg(
+            get_more, self.collection.codec_options
+        ).addCallback(self.__after_reply)
+
+    def __after_reply(self, reply: dict):
+        _check_command_response(reply)
+
+        cursor = reply["cursor"]
+        self.cursor_id = cursor["id"]
+
+        docs_key = "firstBatch"
+        if "nextBatch" in cursor:
+            docs_key = "nextBatch"
+
+        if self.current_batch is None:
+            self.current_offset = 0
+        else:
+            self.current_offset += len(self.current_batch)
+        self.current_batch = cursor[docs_key]
+        self.exhausted = not self.cursor_id
+
+        deferreds = self.next_batch_deferreds
+        self.next_batch_deferreds = None
+        for dfr in deferreds:
+            dfr.callback(cursor[docs_key])
+
+    def next_batch(self) -> Deferred[List[dict]]:
+        if self.exhausted:
+            return defer.fail(StopAsyncIteration())
+
+        dfr = defer.Deferred()
+        if self.next_batch_deferreds is not None:
+            self.next_batch_deferreds.append(dfr)
+        else:
+            self.next_batch_deferreds = [dfr]
+            self.collection.database.connection.getprotocol().addCallback(
+                self.__after_connection if self.cursor_id is None else self.__get_more
+            )
+
+        return dfr
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        print("ANEXT")
+        if self.exhausted:
+            raise StopAsyncIteration()
+
+        pos, self.pos = self.pos, self.pos + 1
+
+        while True:
+            if (
+                self.current_batch
+                and self.current_offset
+                <= pos
+                < self.current_offset + len(self.current_batch)
+            ):
+                return self.current_batch[pos - self.current_offset]
+            elif self.current_batch and self.current_offset > pos:
+                raise StopAsyncIteration()
+            else:
+                await self.next_batch()
+
+
 @comparable
 class Collection:
     """Creates new :class:`Collection` object
@@ -408,6 +509,52 @@ class Collection:
             _deadline,
         ).addCallback(on_ok, on_ok)
 
+    def find_with_cursor_v2(
+        self,
+        filter=None,
+        projection=None,
+        skip=0,
+        limit=0,
+        sort=None,
+        batch_size=0,
+        *,
+        allow_partial_results: bool = False,
+        flags=0,
+        _deadline=None,
+    ):
+        if filter is None:
+            filter = SON()
+
+        if not isinstance(filter, dict):
+            raise TypeError("TxMongo: filter must be an instance of dict.")
+        if not isinstance(projection, (dict, list)) and projection is not None:
+            raise TypeError("TxMongo: projection must be an instance of dict or list.")
+        if not isinstance(skip, int):
+            raise TypeError("TxMongo: skip must be an instance of int.")
+        if not isinstance(limit, int):
+            raise TypeError("TxMongo: limit must be an instance of int.")
+        if not isinstance(batch_size, int):
+            raise TypeError("TxMongo: batch_size must be an instance of int.")
+        if sort:
+            validate_is_mapping("sort", sort)
+
+        projection = self._normalize_fields_projection(projection)
+
+        filter = self.__apply_find_filter(filter, sort)
+
+        cmd = self._gen_find_command(
+            self.database.name,
+            self.name,
+            filter,
+            projection,
+            skip,
+            limit,
+            batch_size,
+            allow_partial_results,
+            flags,
+        )
+        return Cursor(self, cmd, batch_size)
+
     @timeout
     async def find_iterate_batches(
         self,
@@ -531,7 +678,7 @@ class Collection:
         batch_size,
         allow_partial_results,
         flags: int,
-    ):
+    ) -> dict:
         cmd = {"find": coll_name}
         if "$query" in filter_with_modifiers:
             cmd.update(
