@@ -566,7 +566,6 @@ class MongoProtocol(MongoReceiverProtocol, MongoSenderProtocol):
         codec_options: CodecOptions = DEFAULT_CODEC_OPTIONS,
         *,
         check: bool = True,
-        errmsg: str = None,
         allowable_errors=None,
     ) -> defer.Deferred[Optional[dict]]:
         """Send OP_MSG and return parsed response as dict."""
@@ -587,9 +586,7 @@ class MongoProtocol(MongoReceiverProtocol, MongoSenderProtocol):
                 )
 
         if check:
-            _check_command_response(
-                reply, msg=errmsg, allowable_errors=allowable_errors
-            )
+            _check_command_response(reply, allowable_errors=allowable_errors)
         return reply
 
     def handle(self, request: BaseMessage):

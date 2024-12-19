@@ -40,7 +40,7 @@ from tests.basic.utils import (
     only_for_mongodb_older_than,
     only_for_mongodb_starting_from,
 )
-from tests.utils import SingleCollectionTest
+from tests.utils import SingleCollectionTest, patch_send_msg
 from txmongo.errors import TimeExceeded
 from txmongo.protocol import MongoProtocol
 
@@ -252,9 +252,7 @@ class TestFind(SingleCollectionTest):
         batch1, dfr = yield self.coll.find_with_cursor(
             {"$where": "sleep(100); true"}, batch_size=5, timeout=0.8
         )
-        with patch.object(
-            MongoProtocol, "send_msg", side_effect=MongoProtocol.send_msg, autospec=True
-        ) as mock:
+        with patch_send_msg() as mock:
             with self.assertRaises(TimeExceeded):
                 yield dfr
 
@@ -293,9 +291,7 @@ class TestFind(SingleCollectionTest):
 
     @defer.inlineCallbacks
     def test_AllowPartialResults(self):
-        with patch.object(
-            MongoProtocol, "send_msg", side_effect=MongoProtocol.send_msg, autospec=True
-        ) as mock:
+        with patch_send_msg() as mock:
             yield self.coll.find_one(allow_partial_results=True)
 
             mock.assert_called_once()
@@ -303,9 +299,7 @@ class TestFind(SingleCollectionTest):
             cmd = bson.decode(msg.body)
             self.assertEqual(cmd["allowPartialResults"], True)
 
-        with patch.object(
-            MongoProtocol, "send_msg", side_effect=MongoProtocol.send_msg, autospec=True
-        ) as mock:
+        with patch_send_msg() as mock:
             yield self.coll.find().limit(1).allow_partial_results()
 
             mock.assert_called_once()
@@ -807,9 +801,7 @@ class TestInsertMany(SingleCollectionTest):
         # This call will trigger ismaster which we don't want to include in call count
         yield self.coll.count()
 
-        with patch.object(
-            MongoProtocol, "_send", side_effect=MongoProtocol._send, autospec=True
-        ) as mock:
+        with patch_send_msg() as mock:
             result = yield self.coll.insert_many([small, huge])
         mock.assert_called_once()
         self.assertEqual(len(result.inserted_ids), 2)
@@ -1165,6 +1157,10 @@ class TestFindOneAndDelete(SingleCollectionTest):
         doc = yield self.coll.find_one_and_delete({"x": 2}, {"y": 1, "_id": 0})
         self.assertEqual(doc, {"y": 2})
 
+    async def test_Unack(self):
+        coll_unack = self.coll.with_options(write_concern=WriteConcern(w=0))
+        self.assertIsNone(await coll_unack.find_one_and_delete({"x": 2}))
+
 
 class TestFindOneAndReplace(SingleCollectionTest):
 
@@ -1223,6 +1219,14 @@ class TestFindOneAndReplace(SingleCollectionTest):
             ValueError, self.coll.find_one_and_replace, {}, {}, return_document=1
         )
 
+    async def test_Unack(self):
+        coll_unack = self.coll.with_options(write_concern=WriteConcern(w=0))
+        self.assertIsNone(
+            await coll_unack.find_one_and_replace(
+                {"x": 10}, {"x": 15}, return_document=ReturnDocument.BEFORE
+            )
+        )
+
 
 class TestFindOneAndUpdate(SingleCollectionTest):
 
@@ -1278,6 +1282,14 @@ class TestFindOneAndUpdate(SingleCollectionTest):
             {"x": 10}, {"$set": {"y": 15}}, return_document=ReturnDocument.AFTER
         )
         self.assertEqual(doc["y"], 15)
+
+    async def test_Unack(self):
+        coll_unack = self.coll.with_options(write_concern=WriteConcern(w=0))
+        self.assertIsNone(
+            await coll_unack.find_one_and_update(
+                {"x": 10}, {"$set": {"y": 5}}, return_document=ReturnDocument.BEFORE
+            )
+        )
 
 
 class TestCount(SingleCollectionTest):

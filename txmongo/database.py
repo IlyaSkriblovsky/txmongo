@@ -1,12 +1,14 @@
 # Copyright 2009-2015 The TxMongo Developers.  All rights reserved.
 # Use of this source code is governed by the Apache License that can be
 # found in the LICENSE file.
-from twisted.internet import defer
+
+from __future__ import annotations
+
 from twisted.internet.defer import inlineCallbacks
 
 from txmongo.collection import Collection
-from txmongo.protocol import Msg
-from txmongo.utils import check_deadline, timeout
+from txmongo.sessions import ClientSession
+from txmongo.utils import timeout
 
 
 class Database:
@@ -55,7 +57,6 @@ class Database:
         return self.__codec_options or self.__factory.codec_options
 
     @timeout
-    @defer.inlineCallbacks
     def command(
         self,
         command,
@@ -63,31 +64,26 @@ class Database:
         check=True,
         allowable_errors=None,
         codec_options=None,
+        *,
+        session: ClientSession = None,
         _deadline=None,
         **kwargs,
     ):
-        """command(command, value=1, check=True, allowable_errors=None, codec_options=None)"""
+        """command(command, value=1, check=True, allowable_errors=None, codec_options=None, *, session: ClientSession=None)"""
         if isinstance(command, (bytes, str)):
             command = {command: value}
-        if codec_options is None:
-            codec_options = self.codec_options
         command.update(kwargs.copy())
-        command["$db"] = self.name
 
-        proto = yield self.connection.getprotocol()
-        check_deadline(_deadline)
-
-        errmsg = "TxMongo: command {0} on namespace {1} failed with '%s'".format(
-            repr(command), self
-        )
-        reply = yield proto.send_msg(
-            Msg.create(command, codec_options=codec_options),
-            codec_options,
-            check=check,
-            errmsg=errmsg,
+        return self.connection.command(
+            self.name,
+            command,
             allowable_errors=allowable_errors,
+            check=check,
+            codec_options=codec_options or self.codec_options,
+            write_concern=self.write_concern,
+            session=session,
+            _deadline=_deadline,
         )
-        return reply
 
     @timeout
     def create_collection(
