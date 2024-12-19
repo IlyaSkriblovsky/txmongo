@@ -13,21 +13,22 @@ class SingleCollectionTest(unittest.TestCase):
     mongo_host = "localhost"
     mongo_port = 27017
 
-    def setUp(self):
+    async def setUp(self):
         self.conn = txmongo.MongoConnection(self.mongo_host, self.mongo_port)
         self.db = self.conn.mydb
         self.coll = self.db.mycol
+        # MapReduce command on MongoDB ≤4.2 requires collection to actually exist
+        await self.db.create_collection("mycol")
 
-    @defer.inlineCallbacks
-    def tearDown(self):
+    async def tearDown(self):
         while True:
             try:
-                yield self.coll.drop()
+                await self.coll.drop()
                 break
             except AutoReconnect:
                 pass
 
-        yield self.conn.disconnect()
+        await self.conn.disconnect()
 
 
 @contextmanager
